@@ -37,9 +37,7 @@ alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, fold
     return(FALSE)
   })
 
-  cl <- parallel::makeForkCluster(numThreads)
-
-  sequences <- parallel::parLapply(which(includeIndex), cl = cl, fun = function(seqIndex) {
+  funForLapply <- function(seqIndex, sequencesList, numSites, clustalExecutableName, SARScov2reference) {
     cat("Processing sequence ", seqIndex, "... ")
     alignedSeq <- sequencesList[[seqIndex]]
     if (length(sequencesList[[seqIndex]][[1]]) != numSites) {
@@ -50,10 +48,15 @@ alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, fold
     }
     cat("Done! \n\n")
     alignedSeq
-  })
-
-  parallel::stopCluster(cl)
-
+  }
+  sequences <- NULL
+  if (numThreads > 1) {
+    cl <- parallel::makeForkCluster(numThreads)
+    sequences <- parallel::parLapply(which(includeIndex), cl = cl, fun = funForLapply, sequencesList = sequencesList, numSites = numSites, clustalExecutableName = clustalExecutableName, SARScov2reference = SARScov2reference)
+    parallel::stopCluster(cl)
+  } else {
+    sequences <- lapply(which(includeIndex), funForLapply, sequencesList = sequencesList, numSites = numSites, clustalExecutableName = clustalExecutableName, SARScov2reference = SARScov2reference)
+  }
   SARScov2dataAlignedCanada <- do.call(rbind, lapply(sequences, as.matrix))
 
   # We got the following list of sites to exclude from De Maio 2020. They are considered sites where data is of lower quality (sequence extremities) or sites with homoplasies.
@@ -68,22 +71,22 @@ alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, fold
   sequencesFilename
 }
 
-extractMetadata <- function(DNAbinObject, folderForMetadata, patternForMetadataFiles = "minimal", patternInSequenceNames = "(?<=(c|C)anada/Qc-).+(?=/2020)") {
+extractMetadata <- function(DNAbinObject, folderForMetadata, patternForMetadataFiles = "minimal", patternInSequenceNames = "(?<=(c|C)anada/Qc-).+(?=/2020)", seqNameColumn = "sample", sampleDateColumnName = "sample_date") {
+  DNAbinObject <- as.matrix(DNAbinObject)
   sequencesNames <- stringr::str_extract(rownames(DNAbinObject), patternInSequenceNames)
   rownames(DNAbinObject) <- sequencesNames
 
   metadataFiles <- list.files(path = folderForMetadata, pattern = patternForMetadataFiles, full.names = TRUE)
   metadataList <- lapply(metadataFiles, read.table, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
   metadata <- unique(do.call(rbind, metadataList))
-  metadata <- metadata[stringr::str_which(metadata$strain, pattern = "(c|C)anada"), ]
 
   # Not all sequences have a precise date. We'll only consider sequences with a precise sampling date.
 
-  metadataWithCompleteDate <- metadata[nchar(metadata$date) > 7, ]
-  metadataWithCompleteDate$date <- as.POSIXct(metadataWithCompleteDate$date)
+  metadataWithCompleteDate <- metadata[nchar(metadata[ , sampleDateColumnName]) > 7, ]
+  metadataWithCompleteDate[ , sampleDateColumnName] <- as.POSIXct(metadataWithCompleteDate[ , sampleDateColumnName])
 
-  matchingMetadataRowsList <- lapply(sequencesNames, function(seqName) {
-    rowNumber <- stringr::str_which(string = metadataWithCompleteDate$strain, pattern = seqName)
+  funForLapply <- function(seqName) {
+    rowNumber <- stringr::str_which(string = metadataWithCompleteDate[ , seqNameColumn], pattern = seqName)
     if (length(rowNumber) > 1) {
       rowNumber <- rowNumber[which.min(metadataWithCompleteDate$date[rowNumber])]
     }
@@ -92,7 +95,8 @@ extractMetadata <- function(DNAbinObject, folderForMetadata, patternForMetadataF
       returnValue <- c(strain = seqName, date = NA, country = "Canada", division = "Quebec", rss = NA)
     }
     returnValue
-  })
+  }
+  matchingMetadataRowsList <- lapply(sequencesNames, funForLapply)
   matchingMetadataRows <- do.call(rbind, matchingMetadataRowsList)
 
   sequencesToKeepIndices <- which(!is.na(matchingMetadataRows$date))
