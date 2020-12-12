@@ -1,0 +1,10 @@
+Package: CovidClusterAnalyses
+Type: Package
+Title: Does the Covid clustering analyses.
+Version: 0.1.0
+Author: Luc Villandre
+Maintainer: Luc Villandre <luc.villandre@hec.ca>
+Description: Contains functions and vignettes to reproduce the analyses in the paper.
+License: What license is it under?
+Encoding: UTF-8
+LazyData: true
