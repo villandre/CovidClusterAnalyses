@@ -71,14 +71,15 @@ alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, fold
   sequencesFilename
 }
 
-extractMetadata <- function(DNAbinObject, folderForMetadata, patternForMetadataFiles = "minimal", patternInSequenceNames = "(?<=(c|C)anada/Qc-).+(?=/2020)", seqNameColumn = "sample", sampleDateColumnName = "sample_date") {
+extractAndSaveCanadianMetadata <- function(DNAbinObject, folderForMetadata, folderToSaveResult, patternForMetadataFiles = "minimal", patternInSequenceNames = "(?<=(c|C)anada/Qc-).+(?=/2020)", seqNameColumn = "sample", sampleDateColumnName = "sample_date", regionColumnName = "division") {
   DNAbinObject <- as.matrix(DNAbinObject)
   sequencesNames <- stringr::str_extract(rownames(DNAbinObject), patternInSequenceNames)
   rownames(DNAbinObject) <- sequencesNames
 
   metadataFiles <- list.files(path = folderForMetadata, pattern = patternForMetadataFiles, full.names = TRUE)
   metadataList <- lapply(metadataFiles, read.table, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
-  metadata <- unique(do.call(rbind, metadataList))
+  colnamesToKeep <- Reduce(f = "intersect", sapply(metadataList, colnames))
+  metadata <- unique(do.call(rbind, lapply(metadataList, function(listElement) listElement[ , colnamesToKeep])))
 
   # Not all sequences have a precise date. We'll only consider sequences with a precise sampling date.
 
@@ -99,9 +100,101 @@ extractMetadata <- function(DNAbinObject, folderForMetadata, patternForMetadataF
   matchingMetadataRowsList <- lapply(sequencesNames, funForLapply)
   matchingMetadataRows <- do.call(rbind, matchingMetadataRowsList)
 
-  sequencesToKeepIndices <- which(!is.na(matchingMetadataRows$date))
-  sequencesDates <- matchingMetadataRows$date[sequencesToKeepIndices]
-  sequencesRegions <- matchingMetadataRows$division[sequencesToKeepIndices]
+  sequencesToKeepIndices <- which(!is.na(matchingMetadataRows[ , sampleDateColumnName]))
+  sequencesDates <- matchingMetadataRows[sequencesToKeepIndices , sampleDateColumnName]
+  sequencesRegions <- matchingMetadataRows[ , regionColumnName][sequencesToKeepIndices]
   names(sequencesDates) <- names(sequencesRegions) <- sequencesNames[sequencesToKeepIndices]
-  list(timestamps = sequencesDates, regionStamps = sequencesRegions)
+  listToSave <- list(timestamps = sequencesDates[order(sequencesToKeepIndices)], regionStamps = tolower(sequencesRegions)[order(sequencesToKeepIndices)], seqsToKeepIndices = sort(sequencesToKeepIndices))
+  currentDateString <- as.character(Sys.Date())
+  currentDateStringCorrected <- stringr::str_replace_all(currentDateString, pattern = "-", replacement = "")
+  filename <- paste(folderToSaveResult, "/canadianMetadata_", currentDateStringCorrected, ".rds", sep = "")
+  saveRDS(listToSave, file = filename, compress = TRUE)
+  cat("Canadian metadata saved in", filename, "\n")
+  filename
+}
+
+alignAndSaveGISAIDdata <- function(SARScov2reference, folderForSequences, folderWhereToSaveTheResult, GISAIDfastaFilename, numThreads, extremitiesBoundaries = c(55, 29804), homoplasicSites = c(c(187, 1059, 2094, 3037, 3130, 6990, 8022, 10323, 10741, 11074, 13408, 14786, 19684, 20148, 21137, 24034, 24378, 25563, 26144, 26461, 26681, 28077, 28826, 28854, 29700), c(4050, 13402, 11083, 15324, 21575)), clustalExecutableName = "clustalo", resolutionRequirement = 0.95, numSites = 29903, aligned = FALSE) {
+  GISAIDdata <- ape::read.FASTA(GISAIDfastaFilename)
+
+  refLength <- length(SARScov2reference[[1]])
+
+  resolutionThreshold <- 0.95 * refLength
+
+  includeIndex <- sapply(seq_along(GISAIDdata), function(index) {
+    if (length(GISAIDdata[[index]]) < resolutionThreshold) return(FALSE)
+
+    nucleoTable <- table(as.character(GISAIDdata[index]))
+    if (!("n" %in% names(nucleoTable))) return(TRUE)
+    if (nucleoTable[["n"]] < refLength - resolutionThreshold) return(TRUE)
+    return(FALSE)
+  })
+
+  seqsToAlignIndices <- which(includeIndex)
+
+  funForLapply <- function(SARScov2seqIndex, SARScov2reference, SARScov2dataV0) {
+    alignedPair <- ape::clustalo(x = SARScov2dataV0[SARScov2seqIndex], y = SARScov2reference)
+    # alignedSeqs[1, which(as.character(alignedSeqs[2, ]) != "-")]
+    alignedPair[1, ]
+  }
+
+  alignedSeqs <- NULL
+  if (!aligned) {
+  if (numThreads > 1) {
+    cl <- parallel::makeForkCluster(numThreads)
+    alignedSeqs <- parallel::parLapply(seqsToAlignIndices, cl = cl, fun = funForLapply, SARScov2reference = SARScov2reference, SARScov2dataV0 = GISAIDdata) ## Not all sequences have the same length! How do we deal with potential insertions? In practice, what's the difference between "n" and "-"? There might be an insertion in hCoV-19/USA/WA13-UW9/2020|EPI_ISL_413601|2020-03-02 (Seq. 92).
+  parallel::stopCluster(cl)
+  } else {
+    alignedSeqs <- lapply(seqsToAlignIndices, funForLapply, SARScov2reference = SARScov2reference, SARScov2dataV0 = GISAIDdata)
+  }
+  GISAIDdata <- Reduce(f = "c", alignedSeqs)
+  }
+
+  extremitiesToExclude <- c(1:55, 29804:29903)
+  mainHomoplasicSites <- c(187, 1059, 2094, 3037, 3130, 6990, 8022, 10323, 10741, 11074, 13408, 14786, 19684, 20148, 21137, 24034, 24378, 25563, 26144, 26461, 26681, 28077, 28826, 28854, 29700)
+  otherHomoplasicSites <- c(4050, 13402, 11083, 15324, 21575)
+
+  sitesToKeep <- setdiff(1:refLength, c(extremitiesToExclude, mainHomoplasicSites, otherHomoplasicSites))
+
+  GISAIDdata <- as.matrix(GISAIDdata)[ , sitesToKeep]
+
+  currentDateString <- as.character(Sys.Date())
+  currentDateStringCorrected <- stringr::str_replace_all(currentDateString, pattern = "-", replacement = "")
+  sequencesFilename <- paste(folderWhereToSaveTheResult, "/SARScov2dataAlignedGISAIDclean_", currentDateStringCorrected, ".fasta", sep = "")
+
+  ape::write.dna(GISAIDdata, file = sequencesFilename, format = "fasta", nbcol = 1, colw = 100)
+  cat("Saved GISAID sequences in", sequencesFilename, "\n")
+  sequencesFilename
+}
+
+extractAndSaveGISAIDmetadata <- function(GISAIDdata, regionsToSampleFrom = c("canada", "australia", "china", "belgium", "denmark", "france",  "england", "finland", "germany", "italy", "portugal", "russia", "spain", "sweden", "turkey", "usa", "wales"), seed, numToSamplePerRegion = 10, folderToSaveResult, fixRegionLabelsList = list(list(replacement = "china", original = c("anhui", "beijing", "chongqing", "fujian", "fuyang", "ganzhou", "guangdong", "guangzhou", "hangzhou", "hefei", "henan", "hong kong", "jian", "jiangsu", "jiangxi", "jingzhou", "jiujiang", "lishui", "nanchang", "pingxiang", "shandong", "shanghai", "shangrao", "shenzhen", "sichuan", "tianmen", "wuhan", "yunnan", "zhejiang")))) {
+  rawSeqNames <- rownames(GISAIDdata)
+  if (is.null(rawSeqNames)) {
+    rawSeqNames <- names(GISAIDdata)
+  }
+  samplingDates <- stringr::str_extract(rawSeqNames, "(?<=\\|)2020.*$")
+  regionStampsFull <- stringr::str_to_lower(stringr::str_extract(rawSeqNames, pattern = "(?<=hCoV-19/)[a-zA-Z\\s]+(?=/)"))
+  for (i in 1:length(fixRegionLabelsList)) {
+    regionStampsFull <- replace(regionStampsFull, list = which(regionStampsFull %in% fixRegionLabelsList[[i]]$original), values = fixRegionLabelsList[[i]]$replacement)
+  }
+
+  seqsToSampleFromRegionCrit <- regionStampsFull %in% regionsToSampleFrom
+  seqsToSampleFromTimeCrit <- nchar(samplingDates) == 10
+  seqsToSampleFrom <- which(seqsToSampleFromRegionCrit & seqsToSampleFromTimeCrit)
+
+  set.seed(seed)
+  seqIndicesByRegion <- tapply(seqsToSampleFrom, INDEX = regionStampsFull[seqsToSampleFrom], FUN = function(seqIndices) {
+    numToSample <- min(numToSamplePerRegion, length(seqIndices))
+    sample(seqIndices, size = numToSample, replace = FALSE)
+  }, simplify = FALSE)
+  seqsToKeepIndices <- sort(do.call("c", seqIndicesByRegion))
+  timestampsPOSIXct <- as.POSIXct(samplingDates[seqsToKeepIndices]) # Time in days
+  regionStamps <- regionStampsFull[seqsToKeepIndices]
+  names(timestampsPOSIXct) <- names(regionStamps) <- rawSeqNames[seqsToKeepIndices]
+  listToSave <- list(timestamps = timestampsPOSIXct, regionStamps = tolower(regionStamps), seqsToKeepIndices = seqsToKeepIndices)
+  currentDateString <- as.character(Sys.Date())
+  currentDateStringCorrected <- stringr::str_replace_all(currentDateString, pattern = "-", replacement = "")
+  filename <- paste(folderToSaveResult, "/GISAIDmetadata_", currentDateStringCorrected, ".rds", sep = "")
+  saveRDS(listToSave, file = filename, compress = TRUE)
+  cat("GISAID metadata saved in", filename, "\n")
+  filename
 }
