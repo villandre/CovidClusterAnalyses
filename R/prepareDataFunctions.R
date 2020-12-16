@@ -4,7 +4,7 @@
 # intersect(c(mainHomoplasicSites, otherHomoplasicSites), homoplasicSitesVanDorp) # 29 out of 30 sites proposed as homoplasic by De Maio were also proposed as homoplasic by Van Dorp.
 # Function returns the name of the file where the aligned sequences were saved.
 
-alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, folderWhereToSaveTheResult, patternForImport = ".pass.fasta", patternForSeqName = "(?<=/)(L|MCG|MGC|CHAL-|HSU-|JUS-|CHUM-|HCLM-|HDS-|HGA-|HMR-|HSE-|HVE-|JEW-|RIM-|S).+?(?=\\.)", numThreads, extremitiesBoundaries = c(55, 29804), homoplasicSites = c(c(187, 1059, 2094, 3037, 3130, 6990, 8022, 10323, 10741, 11074, 13408, 14786, 19684, 20148, 21137, 24034, 24378, 25563, 26144, 26461, 26681, 28077, 28826, 28854, 29700), c(4050, 13402, 11083, 15324, 21575)), clustalExecutableName = "clustalo-1.2.4-Ubuntu-x86_64", resolutionRequirement = 0.95, numSites = 29903) {
+alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, folderWhereToSaveTheResult, patternForImport = ".pass.fasta", patternForSeqName = "(?<=/)(L|MCG|MGC|CHAL-|HSU-|JUS-|CHUM-|HCLM-|HDS-|HGA-|HMR-|HSE-|HVE-|JEW-|RIM-|S).+?(?=\\.)", numThreads, extremitiesBoundaries = c(55, 29804), homoplasicSites = c(c(187, 1059, 2094, 3037, 3130, 6990, 8022, 10323, 10741, 11074, 13408, 14786, 19684, 20148, 21137, 24034, 24378, 25563, 26144, 26461, 26681, 28077, 28826, 28854, 29700), c(4050, 13402, 11083, 15324, 21575)), resolutionRequirement = 0.95, numSites = 29903) {
   refLength <- length(SARScov2reference[[1]])
 
   filesToImport <- list.files(path = folderForSequences, pattern = patternForImport, recursive = TRUE, full.names = TRUE)
@@ -37,25 +37,25 @@ alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, fold
     return(FALSE)
   })
 
-  funForLapply <- function(seqIndex, sequencesList, numSites, clustalExecutableName, SARScov2reference) {
+  funForLapply <- function(seqIndex, sequencesList, numSites, SARScov2reference) {
     cat("Processing sequence ", seqIndex, "... ")
     alignedSeq <- sequencesList[[seqIndex]]
-    if (length(sequencesList[[seqIndex]][[1]]) != numSites) {
-      alignedSeq <- tryCatch(expr = ape::clustal(x = sequencesList[[seqIndex]], y = SARScov2reference,  exec = clustalExecutableName), error = function(e) e)
-      if ("DNAbin" %in% class(alignedSeq)) {
-        alignedSeq <- alignedSeq[1, which(as.character(alignedSeq[2, ]) != "-")]
-      }
+    # if (length(sequencesList[[seqIndex]][[1]]) != numSites) { # No chance to take if there's a sequence with one missing nucleotide on one side, and one added on the other side.
+    alignedSeq <- tryCatch(expr = ape::clustalomega(x = c(sequencesList[[seqIndex]], SARScov2reference)), error = function(e) e)
+    if ("DNAbin" %in% class(alignedSeq)) {
+      alignedSeq <- alignedSeq[1, which(as.character(alignedSeq[2, ]) != "-")]
     }
+    # }
     cat("Done! \n\n")
     alignedSeq
   }
   sequences <- NULL
   if (numThreads > 1) {
     cl <- parallel::makeForkCluster(numThreads)
-    sequences <- parallel::parLapply(which(includeIndex), cl = cl, fun = funForLapply, sequencesList = sequencesList, numSites = numSites, clustalExecutableName = clustalExecutableName, SARScov2reference = SARScov2reference)
+    sequences <- parallel::parLapply(which(includeIndex), cl = cl, fun = funForLapply, sequencesList = sequencesList, numSites = numSites, SARScov2reference = SARScov2reference)
     parallel::stopCluster(cl)
   } else {
-    sequences <- lapply(which(includeIndex), funForLapply, sequencesList = sequencesList, numSites = numSites, clustalExecutableName = clustalExecutableName, SARScov2reference = SARScov2reference)
+    sequences <- lapply(which(includeIndex), funForLapply, sequencesList = sequencesList, numSites = numSites, SARScov2reference = SARScov2reference)
   }
   SARScov2dataAlignedCanada <- do.call(rbind, lapply(sequences, as.matrix))
 
@@ -73,8 +73,8 @@ alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, fold
 
 extractAndSaveCanadianMetadata <- function(DNAbinObject, folderForMetadata, folderToSaveResult, patternForMetadataFiles = "minimal", patternInSequenceNames = "(?<=(c|C)anada/Qc-).+(?=/2020)", seqNameColumn = "sample", sampleDateColumnName = "sample_date", regionColumnName = "division") {
   DNAbinObject <- as.matrix(DNAbinObject)
-  sequencesNames <- stringr::str_extract(rownames(DNAbinObject), patternInSequenceNames)
-  rownames(DNAbinObject) <- sequencesNames
+  # sequencesNames <- stringr::str_extract(rownames(DNAbinObject), patternInSequenceNames)
+  # rownames(DNAbinObject) <- sequencesNames
 
   metadataFiles <- list.files(path = folderForMetadata, pattern = patternForMetadataFiles, full.names = TRUE)
   metadataList <- lapply(metadataFiles, read.table, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
@@ -85,25 +85,23 @@ extractAndSaveCanadianMetadata <- function(DNAbinObject, folderForMetadata, fold
 
   metadataWithCompleteDate <- metadata[nchar(metadata[ , sampleDateColumnName]) > 7, ]
   metadataWithCompleteDate[ , sampleDateColumnName] <- as.POSIXct(metadataWithCompleteDate[ , sampleDateColumnName])
+  metadataIndicesToKeep <- which(!duplicated(metadataWithCompleteDate[ , seqNameColumn]))
 
-  funForLapply <- function(seqName) {
-    rowNumber <- stringr::str_which(string = metadataWithCompleteDate[ , seqNameColumn], pattern = seqName)
-    if (length(rowNumber) > 1) {
-      rowNumber <- rowNumber[which.min(metadataWithCompleteDate$date[rowNumber])]
-    }
-    returnValue <- metadataWithCompleteDate[rowNumber, ]
-    if (length(rowNumber) == 0) {
-      returnValue <- c(strain = seqName, date = NA, country = "Canada", division = "Quebec", rss = NA)
-    }
-    returnValue
-  }
-  matchingMetadataRowsList <- lapply(sequencesNames, funForLapply)
-  matchingMetadataRows <- do.call(rbind, matchingMetadataRowsList)
-
-  sequencesToKeepIndices <- which(!is.na(matchingMetadataRows[ , sampleDateColumnName]))
-  sequencesDates <- matchingMetadataRows[sequencesToKeepIndices , sampleDateColumnName]
-  sequencesRegions <- matchingMetadataRows[ , regionColumnName][sequencesToKeepIndices]
-  names(sequencesDates) <- names(sequencesRegions) <- sequencesNames[sequencesToKeepIndices]
+  seqIndicesMatchingNamesInMetadata <- lapply(metadataWithCompleteDate[metadataIndicesToKeep, seqNameColumn], FUN = function(seqName) {
+    matchNumbers <- grep(pattern = seqName, x = rownames(DNAbinObject))
+    if (length(matchNumbers) == 0) matchNumbers <- NA
+    matchNumbers[[1]] # There might be repeated rows...
+  }) # Some sequences mentioned in metadata have been flagged or rejected. What does it mean?
+  seqIndicesToKeepWithNAs <- do.call("c", seqIndicesMatchingNamesInMetadata)
+  sequencesToKeepIndices <- seqIndicesToKeepWithNAs[!is.na(seqIndicesToKeepWithNAs)]
+  sequencesDates <- metadataWithCompleteDate[metadataIndicesToKeep[!is.na(seqIndicesToKeepWithNAs)], sampleDateColumnName]
+  sequencesRegions <- metadataWithCompleteDate[metadataIndicesToKeep[!is.na(seqIndicesToKeepWithNAs)], regionColumnName]
+  names(sequencesDates) <- names(sequencesRegions) <- metadataWithCompleteDate[metadataIndicesToKeep[!is.na(seqIndicesToKeepWithNAs)], seqNameColumn]
+  # Some timestamps are wrong. We must remove sequences with faulty timestamps.
+  wrongTimestamps <- sequencesDates < as.POSIXct("2020-01-01 UTC")
+  sequencesToKeepIndices <- sequencesToKeepIndices[!wrongTimestamps]
+  sequencesRegions <- sequencesRegions[!wrongTimestamps]
+  sequencesDates <- sequencesDates[!wrongTimestamps]
   listToSave <- list(timestamps = sequencesDates[order(sequencesToKeepIndices)], regionStamps = tolower(sequencesRegions)[order(sequencesToKeepIndices)], seqsToKeepIndices = sort(sequencesToKeepIndices))
   currentDateString <- as.character(Sys.Date())
   currentDateStringCorrected <- stringr::str_replace_all(currentDateString, pattern = "-", replacement = "")
@@ -113,12 +111,12 @@ extractAndSaveCanadianMetadata <- function(DNAbinObject, folderForMetadata, fold
   filename
 }
 
-alignAndSaveGISAIDdata <- function(SARScov2reference, folderForSequences, folderWhereToSaveTheResult, GISAIDfastaFilename, numThreads, extremitiesBoundaries = c(55, 29804), homoplasicSites = c(c(187, 1059, 2094, 3037, 3130, 6990, 8022, 10323, 10741, 11074, 13408, 14786, 19684, 20148, 21137, 24034, 24378, 25563, 26144, 26461, 26681, 28077, 28826, 28854, 29700), c(4050, 13402, 11083, 15324, 21575)), clustalExecutableName = "clustalo", resolutionRequirement = 0.95, numSites = 29903, aligned = FALSE) {
+alignAndSaveGISAIDdata <- function(SARScov2reference, folderForSequences, folderWhereToSaveTheResult, GISAIDfastaFilename, numThreads, extremitiesBoundaries = c(55, 29804), homoplasicSites = c(c(187, 1059, 2094, 3037, 3130, 6990, 8022, 10323, 10741, 11074, 13408, 14786, 19684, 20148, 21137, 24034, 24378, 25563, 26144, 26461, 26681, 28077, 28826, 28854, 29700), c(4050, 13402, 11083, 15324, 21575)), resolutionRequirement = 0.95, numSites = 29903, aligned = FALSE) {
   GISAIDdata <- ape::read.FASTA(GISAIDfastaFilename)
 
   refLength <- length(SARScov2reference[[1]])
 
-  resolutionThreshold <- 0.95 * refLength
+  resolutionThreshold <- resolutionRequirement * refLength
 
   includeIndex <- sapply(seq_along(GISAIDdata), function(index) {
     if (length(GISAIDdata[[index]]) < resolutionThreshold) return(FALSE)
@@ -132,7 +130,7 @@ alignAndSaveGISAIDdata <- function(SARScov2reference, folderForSequences, folder
   seqsToAlignIndices <- which(includeIndex)
 
   funForLapply <- function(SARScov2seqIndex, SARScov2reference, SARScov2dataV0) {
-    alignedPair <- ape::clustalo(x = SARScov2dataV0[SARScov2seqIndex], y = SARScov2reference)
+    alignedPair <- ape::clustalomega(x = c(SARScov2dataV0[SARScov2seqIndex], SARScov2reference))
     # alignedSeqs[1, which(as.character(alignedSeqs[2, ]) != "-")]
     alignedPair[1, ]
   }
