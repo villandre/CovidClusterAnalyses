@@ -5,7 +5,6 @@
 # Function returns the name of the file where the aligned sequences were saved.
 
 alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, folderWhereToSaveTheResult, patternForImport = ".pass.fasta", patternForSeqName = "(?<=/)(L|MCG|MGC|CHAL-|HSU-|JUS-|CHUM-|HCLM-|HDS-|HGA-|HMR-|HSE-|HVE-|JEW-|RIM-|S).+?(?=\\.)", numThreads, extremitiesBoundaries = c(55, 29804), homoplasicSites = c(c(187, 1059, 2094, 3037, 3130, 6990, 8022, 10323, 10741, 11074, 13408, 14786, 19684, 20148, 21137, 24034, 24378, 25563, 26144, 26461, 26681, 28077, 28826, 28854, 29700), c(4050, 13402, 11083, 15324, 21575)), resolutionRequirement = 0.95, numSites = 29903) {
-  refLength <- length(SARScov2reference[[1]])
 
   filesToImport <- list.files(path = folderForSequences, pattern = patternForImport, recursive = TRUE, full.names = TRUE)
 
@@ -26,6 +25,7 @@ alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, fold
 
   sequencesList <- lapply(uniqueFilenames, ape::read.FASTA)
 
+  refLength <- length(SARScov2reference[[1]])
   resolutionThreshold <- resolutionRequirement * refLength
 
   includeIndex <- sapply(sequencesList, function(sequenceDNAbin) {
@@ -63,9 +63,13 @@ alignAndSaveCanadianData <- function(SARScov2reference, folderForSequences, fold
 
   extremitiesToExclude <- c(1:extremitiesBoundaries[[1]], extremitiesBoundaries[[2]]:29903)
   sitesToKeep <- setdiff(1:refLength, c(extremitiesToExclude, homoplasicSites))
+
   currentDateString <- as.character(Sys.Date())
   currentDateStringCorrected <- stringr::str_replace_all(currentDateString, pattern = "-", replacement = "")
-  sequencesFilename <- paste(folderWhereToSaveTheResult, "/SARScov2dataAlignedCanada_", currentDateStringCorrected, ".fasta", sep = "")
+  filename <- "/SARScov2dataAlignedCanada_"
+  dataToSave <- SARScov2dataAlignedCanada
+
+  sequencesFilename <- paste(folderWhereToSaveTheResult, filename, currentDateStringCorrected, ".fasta", sep = "")
   ape::write.dna(SARScov2dataAlignedCanada[ , sitesToKeep], file = sequencesFilename, format = "fasta", nbcol = 1, colw = 100)
   cat("Saved sequences in ", sequencesFilename, "\n")
   SARScov2dataAlignedCanada[ , sitesToKeep]

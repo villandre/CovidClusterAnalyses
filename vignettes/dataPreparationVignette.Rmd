@@ -1,0 +1,62 @@
+---
+title: "Preparing data for analyses"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{dataPreparationVignette}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(CovidClusterAnalyses)
+
+```
+We first align the Quebec sequences to the MN908947.3 reference. We only keep sequences with more than 99\% coverage. The reference has length $29,903$, which means we need at least $29,604$ known sites for a sequence to belong to the final sample. 
+```{r, eval = FALSE}
+library(ape)
+folderForOutputs <- "/home/luc/CovidProjectFiles/outputFiles/"
+folderForData <- "/home/luc/CovidProjectFiles/data/"
+SARScov2reference <- read.FASTA(paste(folderForData, "Ref_MN908947.3.fasta", sep = "/"))
+canadianSequences <- alignAndSaveCanadianData(SARScov2reference, folderForSequences = folderForData, folderWhereToSaveTheResult = folderForOutputs, numThreads = 8, resolutionRequirement = 0.99)
+```
+In order to root the phylogeny and identify introductions into the Qu\'{e}bec population, we need a number of external sequences from countries whose epidemics could be related. We obtained those sequences from GISAID. The sequences are also aligned to the MN908947.3 reference. We also require the sequences to have less than one percent missingness. Clustering analyses will only employ a fraction of those, as MrBayes, without GPU assistance, can only handle samples of size $5,000$ or less.
+```{r, eval = FALSE}
+GISAIDsequences <- alignAndSaveGISAIDdata(SARScov2reference = SARScov2reference, folderForSequences = folderForData, GISAIDfastaFilename = paste(folderForData, "gisaid_hcov-19_2020_05_08_17.fasta", sep = "/"),  folderWhereToSaveTheResult = folderForOutputs, numThreads = 8, aligned = TRUE, resolutionRequirement = 0.99)
+# Running the previous lines takes a long time. We can load the results instead if we want to test code in the following lines.
+# canadianSequences <- ape::read.FASTA(paste(folderForOutputs, "SARScov2dataAlignedCanada_20201215.fasta", sep = ""))
+# GISAIDsequences <- ape::read.FASTA(paste(folderForOutputs, "GISAID_May08_alignedToMN908947.3_noHomoplasy.fasta", sep = "/"))
+```
+We now extract metadata, which includes, for each sequence, a timestamp and an indicator as to where the case was reported. The "extract...Metadata" functions also return a vector of indices for sequences that should enter the final sample.
+```{r, eval = FALSE}
+canadianMetadata <- extractAndSaveCanadianMetadata(DNAbinObject = canadianSequences, folderForMetadata = folderForData, patternForMetadataFiles = "metadata_reference", patternInSequenceNames = "(?<=(c|C)anada/Qc-).+(?=/2020)", folderToSaveResult = folderForOutputs)
+regionsForRoots <- c("canada", "australia", "china", "belgium", "denmark", "france",  "england", "finland", "germany", "italy", "portugal", "russia", "spain", "sweden", "turkey", "usa", "wales")
+internationalMetadata <- extractAndSaveGISAIDmetadata(GISAIDdata = GISAIDsequences, regionsToSampleFrom = regionsForRoots, seed = 12, folderToSaveResult = folderForOutputs, numToSamplePerRegion = floor((3000 - length(canadianMetadata$seqsToKeepIndices))/length(regionsForRoots)))
+
+names(canadianSequences) <- fixCanadianSeqNames(names(canadianSequences))
+names(GISAIDsequences) <- fixGISAIDseqNames(names(GISAIDsequences))
+```
+We run a final check to exclude international sequences that may contain sequencing errors. Canadian sequences are of high quality; the idea is that international sequences that are much further from the reference than the most distinctive Canadian sequence are more likely to have sequencing errors. We exclude any international sequence whose distance from the reference is more than twice that of the furthest Canadian sequence.
+```{r, eval = FALSE}
+internationalSeqsToKeepIndices <- identifyNonOutlierInternationalSeqs(SARScov2reference, canadianSequences, GISAIDsequences, canadianIndices = canadianMetadata$seqsToKeepIndices, internationalIndices = internationalMetadata$seqsToKeepIndices, excessDistThreshold = 2)
+```
+We then generate the final list used by the clustering function. We only keep Qu\'ebec sequences for which we have a timestamp. The associated metadata include an indicator of the administrative region where the sequence was obtained, e.g. Laurentides, but for the purpose of clustering, all sequences will be labelled "Qu\'ebec".
+```{r, eval = FALSE}
+DNAbinSample <- rbind(as.matrix(canadianSequences)[canadianMetadata$seqsToKeepIndices, ], as.matrix(GISAIDsequences)[internationalSeqsToKeepIndices, ])
+matchIndicesInternational <- match(internationalSeqsToKeepIndices, internationalMetadata$seqsToKeepIndices)
+regionStamps <- c(canadianMetadata$regionStamps, internationalMetadata$regionStamps[matchIndicesInternational])
+timestamps <- c(canadianMetadata$timestamps, internationalMetadata$timestamps[matchIndicesInternational])
+
+listToSave <- list(DNAbinData = DNAbinSample, timestamps = timestamps, regionStamps = regionStamps)
+currentDateString <- as.character(Sys.Date())
+currentDateStringCorrected <- stringr::str_replace_all(currentDateString, pattern = "-", replacement = "")
+filename <- paste(folderForOutputs, "/sequencesToClusterFormattedForMrBayes_", currentDateStringCorrected, ".rds", sep = "")
+saveRDS(listToSave, file = filename, compress = TRUE)
+```
+
