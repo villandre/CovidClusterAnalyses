@@ -208,7 +208,7 @@ fixCanadianSeqNames <- function(canadianSeqNames) {
 }
 
 fixGISAIDseqNames <- function(GISAIDseqNames) {
-  extractedNames <- stringr::str_extract(GISAIDseqNames, "(?<=hCoV-19/).+")
+  extractedNames <- stringr::str_replace_all(GISAIDseqNames, "hCoV-19/", "")
   extractedNames <- stringr::str_replace_all(extractedNames, "_", "")
   extractedNames <- stringr::str_replace_all(extractedNames, " ", "")
   extractedNames <- stringr::str_replace_all(extractedNames, "\\|", "_")

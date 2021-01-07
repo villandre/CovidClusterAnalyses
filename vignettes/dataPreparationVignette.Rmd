@@ -47,11 +47,13 @@ We run a final check to exclude international sequences that may contain sequenc
 internationalSeqsToKeepIndices <- identifyNonOutlierInternationalSeqs(SARScov2reference, canadianSequences, GISAIDsequences, canadianIndices = canadianMetadata$seqsToKeepIndices, internationalIndices = internationalMetadata$seqsToKeepIndices, excessDistThreshold = 2)
 ```
 We then generate the final list used by the clustering function. We only keep Qu\'ebec sequences for which we have a timestamp. The associated metadata include an indicator of the administrative region where the sequence was obtained, e.g. Laurentides, but for the purpose of clustering, all sequences will be labelled "Qu\'ebec".
-```{r, eval = FALSE}
+```{r, eval=FALSE}
 DNAbinSample <- rbind(as.matrix(canadianSequences)[canadianMetadata$seqsToKeepIndices, ], as.matrix(GISAIDsequences)[internationalSeqsToKeepIndices, ])
 matchIndicesInternational <- match(internationalSeqsToKeepIndices, internationalMetadata$seqsToKeepIndices)
 regionStamps <- c(canadianMetadata$regionStamps, internationalMetadata$regionStamps[matchIndicesInternational])
 timestamps <- c(canadianMetadata$timestamps, internationalMetadata$timestamps[matchIndicesInternational])
+names(regionStamps) <- fixGISAIDseqNames(names(regionStamps))
+names(timestamps) <- fixGISAIDseqNames(names(timestamps))
 
 listToSave <- list(DNAbinData = DNAbinSample, timestamps = timestamps, regionStamps = regionStamps)
 currentDateString <- as.character(Sys.Date())
