@@ -7,6 +7,7 @@ Maintainer: Luc Villandre <luc.villandre@hec.ca>
 Description: Contains functions and vignettes to reproduce the analyses in the paper.
 License: What license is it under?
 Depends: R (>= 3.2.0), ape (>= 5.3), phangorn (>= 2.5.5), stringr (>= 1.4.0), stringi (>= 1.4.6)
+Recommends: gridExtra (>= 2.3)
 Encoding: UTF-8
 LazyData: true
 Suggests: 

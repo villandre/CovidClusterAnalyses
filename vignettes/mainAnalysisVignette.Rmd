@@ -1,0 +1,69 @@
+---
+title: "Code for the main analysis in the paper"
+author: "Luc Villandre"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+The following code is used to fit the clustering model described in the paper. Running the following code can take up to several weeks, depending on the specs of the machine on which MrBayes is installed. We recommend at least eight CPUs and $64$ GB of memory. MrBayes must be installed with MPI support.
+```{r, eval = FALSE}
+library(ape)
+library(stringr)
+library(CovidCluster)
+
+setwd("/media/permanentStorage/CovidProjectFiles")
+# setwd("/home/luc/CovidProjectFiles/")
+
+filesToImport <- list.files("outputFiles/", pattern = "sequencesToClusterFormattedForMrBayes", full.names = TRUE)
+creationDateAsNumeric <- as.numeric(stringr::str_extract(filesToImport, "(?<=MrBayes_).+(?=\\.rds)"))
+dataForAnalysisList <- readRDS(filesToImport[[which.max(creationDateAsNumeric)]])
+
+rootSequenceName <- rownames(dataForAnalysisList$DNAbinData)[which.min(dataForAnalysisList$timestamps)]
+
+set.seed(1)
+
+clusterResults <- CovidCluster::covidCluster(
+  DNAbinData = dataForAnalysisList$DNAbinData,
+  outgroup = rootSequenceName,
+  clusterRegion = "quebec",
+  distLimit = 21, # It can take up to 7 days between infection and diagnostic. Then, we're interested in groups of infections that happened within 14 days, hence 21.
+  seqsTimestampsPOSIXct = dataForAnalysisList$timestamps,
+  epidemicRootTimePOSIXct = as.POSIXct("2019-12-15 EST"),
+  seqsRegionStamps = dataForAnalysisList$regionStamps,
+  folderForMrBayesFiles = "outputFiles/",
+  perSiteClockRate = 2.4e-3, # Taken from Chaw 2020
+  control = list(
+    lengthForNullExtBranchesInPhylo = 1e-6,
+    numReplicatesForClusMemScoring = 50,
+    numThreads = 8,
+    MrBayesOutputThinningRate = 0.1,
+    skipMrBayes = TRUE), # This should be set to TRUE if the MrBayes output is already available in "folderForMrBayesFiles".
+  MrBayes.control = list(MrBayesShellCommand = "mb",
+                         nst = 6L,
+                         rates = "invgamma",
+                         ngammacat = 4L,
+                         nruns = 2L,
+                         nchains = 4L,
+                         ngen = 7000000L,
+                         temp = 0.005,
+                         samplefreq = 2000L,
+                         diagnfreq = 2000L,
+                         printfreq = 2000L,
+                         burninfrac = 0.5,
+                         MPIenabled = TRUE,
+                         append = "yes")) # Reminder: # of trees considered by the algorithm is ~ (ngen/samplefreq - floor(burninfrac * ngen)) * 2
+
+saveRDS(clusterResults, file = "outputFiles/chainResultsQuebecCanadaAndInternational_Dec15.rds", compress = TRUE)
+```
+
