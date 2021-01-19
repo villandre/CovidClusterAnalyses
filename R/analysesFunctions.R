@@ -1,5 +1,14 @@
 plotClustersTile <- function(covidClusterObject, minClusSize = 10, textScaleFactor = 1, oneFilePerCluster = FALSE, outputFolder, device = "pdf", numClusters = Inf, clustersToPlot = "hier", controlForDevice = NULL) {
-  plotObject <- covidClusterObject$objectToPlot
+  seqNames <- rownames(covidClusterObject$adjMatrix)
+  frameToPlot <- as.data.frame(Matrix::mat2triplet(covidClusterObject$adjMatrix))
+  colnames(frameToPlot) <- c("Sequence_x", "Sequence_y", "CoclusteringRate")
+  frameToPlot$Sequence_x <- factor(frameToPlot$Sequence_x, levels = seq_along(seqNames), labels = seqNames)
+  frameToPlot$Sequence_y <- factor(frameToPlot$Sequence_y, levels = seq_along(seqNames), labels = seqNames)
+  frameToPlot <- subset(frameToPlot, subset = CoclusteringRate > 1e-8)
+  freqTable <- table(frameToPlot$Sequence_x)
+  singletons <- names(freqTable)[which(freqTable == 1)]
+  frameToPlot <- subset(frameToPlot, subset = !(Sequence_x %in% singletons))
+
   clusterIndices <- covidClusterObject$MAPclusters
   if (clustersToPlot == "hier") {
     clusterIndices <- covidClusterObject$hierarchicalClusters
@@ -7,6 +16,13 @@ plotClustersTile <- function(covidClusterObject, minClusSize = 10, textScaleFact
   clusSizes <- table(clusterIndices)
   largeClusters <- as.numeric(names(clusSizes))[clusSizes >= minClusSize]
   largeClusters <- head(largeClusters, n = numClusters)
+  plotObject <-
+    ggplot2::ggplot(data = frameToPlot, ggplot2::aes(x = Sequence_x, y = Sequence_y, fill = CoclusteringRate)) +
+    ggplot2::geom_tile(color = "white") +
+    ggplot2::scale_fill_steps(low = "white", high = "red", limit = c(0,1.01), space = "Lab", name = "Coclustering\nrate") +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, vjust = 1, hjust = 1)) +
+    ggplot2::coord_fixed()
 
   if (oneFilePerCluster) {
     tilePlotList <- lapply(largeClusters, FUN = function(clusIndex) {

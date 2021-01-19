@@ -19,7 +19,7 @@ library(CovidClusterAnalyses)
 ```
 
 We start by loading the data.
-```{r}
+```{r, eval = FALSE}
 library(ape)
 library(stringr)
 library(CovidCluster)
@@ -32,34 +32,37 @@ creationDateAsNumeric <- as.numeric(stringr::str_extract(filesToImport, "(?<=MrB
 dataForAnalysisList <- readRDS(filesToImport[[which.max(creationDateAsNumeric)]])
 ```
 The `covidCluster` function returns adjacency matrices based on a given cluster definition. We are interested in the extent to which clusters are affected based on cluster definition and threshold.
-```{r}
-distLimitVec <- c(7, 14, 21)
-definitionsVec <- c("mrca", "cophenetic")
-simulScenarios <- expand.grid(distance = distLimitVec, clusterDefinition = definitionsVec)
+```{r, eval = FALSE}
+# distLimitVec <- c(7, 14)
+distLimitVec <- 21
+# definitionsVec <- c("mrca", "cophenetic")
+definitionsVec <- "mrca"
+simulScenarios <- expand.grid(distance = distLimitVec, clusterDefinition = definitionsVec, stringsAsFactors = FALSE)
 clustersByScenario <- 
   lapply(1:nrow(simulScenarios),
          FUN = function(scenarioIndex) {
            clusterFromMrBayesOutput(
              seqsTimestampsPOSIXct = dataForAnalysisList$timestamps, 
              seqsRegionStamps = dataForAnalysisList$regionStamps,
-             MrBayesTreesFilename = "outputFiles/mrbayesData.run1.t",
+             MrBayesTreesFilename = "outputFiles/mrbayesData.nex.run1.t",
+             # MrBayesParametersFilename = "outputFiles/mrbayesData.run1.p",
              clusterRegion = "quebec",
              clusterCriterion = simulScenarios$clusterDefinition[[scenarioIndex]],
              burninFraction = 0.75,
              linkageRequirement = 0.9,
              distLimit = simulScenarios$distance[[scenarioIndex]],
-             estRootTime = as.POSIXct("2019-12-15 EST"),
+             epidemicRootTimePOSIXct = as.POSIXct("2019-12-15 EST"),
              perSiteClockRate = 2.4e-3, # Taken from Chaw 2020
              control = list(
                lengthForNullExtBranchesInPhylo = 1e-6,
-               numReplicatesForClusMemScoring = 100,
+               numReplicatesForClusMemScoring = 25,
                numThreads = 8,
-               MrBayesOutputThinningRate = 0.2
+               MrBayesOutputThinningRate = 0.1
              ))
          })
 ```
 For each definition, we can then compute a cluster size distribution for the MAP clusters and the linkage clusters.
-```{r}
+```{r, eval = FALSE}
 summaryFct <- function(outputList) {
   MAPclusSizeDist <- table(table(outputList$MAPclusters))
   hierClusSizeDist <- table(table(outputList$hierarchicalClusters))
@@ -69,8 +72,8 @@ summaryFct <- function(outputList) {
 sizeDistributions <- lapply(clustersByScenario, summaryFct)
 ```
 We now plot the adjacency matrices for the nine largest clusters.
-```{r}
-facettedPlot <- plotClustersTile(covidClusterObject = clusterResults, minClusSize = 15, textScaleFactor = 1, oneFilePerCluster = TRUE, numClusters = 16, outputFolder = "outputFiles/")
+```{r, eval = FALSE}
+facettedPlot <- plotClustersTile(covidClusterObject = clustersByScenario[[1]], minClusSize = 15, textScaleFactor = 1, oneFilePerCluster = TRUE, numClusters = 16, outputFolder = "outputFiles/")
 ```
 
 
