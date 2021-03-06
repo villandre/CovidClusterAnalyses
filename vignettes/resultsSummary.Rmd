@@ -15,6 +15,7 @@ knitr::opts_chunk$set(
 ```
 
 ```{r setup}
+if ("package:CovidClusterAnalyses" %in% search()) detach("package:CovidClusterAnalyses", unload = T)
 library(CovidClusterAnalyses)
 ```
 
@@ -22,6 +23,7 @@ We start by loading the data.
 ```{r, eval = FALSE}
 library(ape)
 library(stringr)
+if ("package:CovidCluster" %in% search()) detach("package:CovidCluster", unload = T)
 library(CovidCluster)
 
 setwd("/media/permanentStorage/CovidProjectFiles")
@@ -31,49 +33,173 @@ filesToImport <- list.files("outputFiles/", pattern = "sequencesToClusterFormatt
 creationDateAsNumeric <- as.numeric(stringr::str_extract(filesToImport, "(?<=MrBayes_).+(?=\\.rds)"))
 dataForAnalysisList <- readRDS(filesToImport[[which.max(creationDateAsNumeric)]])
 ```
-The `covidCluster` function returns adjacency matrices based on a given cluster definition. We are interested in the extent to which clusters are affected based on cluster definition and threshold.
+We first analyse the temporal and regional breakdown of the sampled sequences.
+```{r, eval=F}
+quebecSeqsIndices <- which(dataForAnalysisList$regionStamps == "quebec")
+internationalSeqsIndices <- setdiff(seq_along(dataForAnalysisList$regionStamps), quebecSeqsIndices)
+summary(dataForAnalysisList$timestamps[quebecSeqsIndices])
+summary(dataForAnalysisList$timestamps[internationalSeqsIndices])
+table(dataForAnalysisList$regionStamps) # Breakdown of region stamps. For international sequences, we kept at most 65 sequences. We had fewer when the total number of available sequences was below that number.
+```
+We now look at polymorphic and missing sites.
+```{r, eval=F}
+# To obtain the actual site number of site x in the dataset we use...
+convertToSARScov2siteNum <- function(x) {
+  .convertToSiteNum(x, totalNumberOfNucleo = 29903, removedSites = c(1:55, 29804:29903, 187, 1059, 2094, 3037, 3130, 6990, 8022, 10323, 10741, 11074, 13408, 14786, 19684, 20148, 21137, 24034, 24378, 25563, 26144, 26461, 26681, 28077, 28826, 28854, 29700, 4050, 13402, 11083, 15324, 21575))
+}
+numMissingSites <- sapply(1:nrow(dataForAnalysisList$DNAbinData), function(seqIndex) sum(as.character(dataForAnalysisList$DNAbinData[seqIndex, ]) %in% c("-", "n")))
+summary(numMissingSites[quebecSeqsIndices])
+
+polymorphicSites <- which(sapply(1:ncol(dataForAnalysisList$DNAbinData), function(siteIndex) {
+  freqTable <- table(as.character(dataForAnalysisList$DNAbinData[ , siteIndex]))
+  length(freqTable[setdiff(names(freqTable), c("-", "n"))]) > 1
+}))
+polymorphicSitesFreqTable <- lapply(polymorphicSites, function(siteIndex) {
+  table(as.character(dataForAnalysisList$DNAbinData[ , siteIndex]))
+})
+sitesWithAmbig <- which(sapply(1:ncol(dataForAnalysisList$DNAbinData), function(siteIndex) { 
+  freqTable <- table(as.character(dataForAnalysisList$DNAbinData[ , siteIndex]))
+  length(freqTable[setdiff(names(freqTable), c("a", "t", "c", "g", "-", "n"))]) > 1
+}))
+lapply(sitesWithAmbig, function(siteIndex) {
+  table(as.character(dataForAnalysisList$DNAbinData[ , siteIndex]))
+})
+sitesWithMultipleNucleo <- which(sapply(1:ncol(dataForAnalysisList$DNAbinData), function(siteIndex) { 
+  freqTable <- table(as.character(dataForAnalysisList$DNAbinData[ , siteIndex]))
+  length(freqTable[intersect(c("a", "t", "c", "g"), names(freqTable))]) > 1
+}))
+
+polyThresholds <- c(1:30, 100)
+veryPolySites <- sapply(1:ncol(dataForAnalysisList$DNAbinData), function(siteIndex) { 
+  freqTable <- table(as.character(dataForAnalysisList$DNAbinData[ , siteIndex]))
+  conditionOne <- length(freqTable[intersect(c("a", "t", "c", "g"), names(freqTable))]) > 1
+  conditionTwo <- sapply(polyThresholds, function(threshold) all(freqTable[intersect(c("a", "t", "c", "g"), names(freqTable))] > threshold))
+  conditionOne & conditionTwo
+})
+numVeryPoly <- apply(veryPolySites, MARGIN = 1, sum)
+convertToSARScov2siteNum(which(veryPolySites[31,]))
+```
+
+The `covidCluster` and `clusterFromMrBayes` functions return the MAP clusters and linkage-xx clusters obtained through Monte Carlo integration. The only difference between the two functions is that the former calls `MrBayes` to produce a sample from the topological space, while the latter loads results from an already completed run. The following code simulates one million trees from the posterior of the cluster membership indices.
 ```{r, eval = FALSE}
-# distLimitVec <- c(7, 14)
-distLimitVec <- 21
-# definitionsVec <- c("mrca", "cophenetic")
+distLimitVec <- c(7,14,21)
 definitionsVec <- "mrca"
 simulScenarios <- expand.grid(distance = distLimitVec, clusterDefinition = definitionsVec, stringsAsFactors = FALSE)
+# RNG is 
 clustersByScenario <- 
-  lapply(1:nrow(simulScenarios),
-         FUN = function(scenarioIndex) {
-           clusterFromMrBayesOutput(
-             seqsTimestampsPOSIXct = dataForAnalysisList$timestamps, 
-             seqsRegionStamps = dataForAnalysisList$regionStamps,
-             MrBayesTreesFilename = "outputFiles/mrbayesData.nex.run1.t",
-             # MrBayesParametersFilename = "outputFiles/mrbayesData.run1.p",
-             clusterRegion = "quebec",
-             clusterCriterion = simulScenarios$clusterDefinition[[scenarioIndex]],
-             burninFraction = 0.75,
-             linkageRequirement = 0.9,
-             distLimit = simulScenarios$distance[[scenarioIndex]],
-             epidemicRootTimePOSIXct = as.POSIXct("2019-12-15 EST"),
-             perSiteClockRate = 2.4e-3, # Taken from Chaw 2020
-             control = list(
-               lengthForNullExtBranchesInPhylo = 1e-6,
-               numReplicatesForClusMemScoring = 25,
-               numThreads = 8,
-               MrBayesOutputThinningRate = 0.1
-             ))
-         })
+  lapply(1:nrow(simulScenarios), FUN = function(scenarioIndex) {
+    clusterOutput <- clusterFromMrBayesOutput(seqsTimestampsPOSIXct = dataForAnalysisList$timestamps, seqsRegionStamps = dataForAnalysisList$regionStamps, MrBayesTreesFilename = "outputFiles/mrbayesData.nex.run2.t", clusterRegion = "quebec", rootRegion = "china", clusterCriterion = simulScenarios$clusterDefinition[[scenarioIndex]], burninFraction = 17.5/18.5, linkageRequirement = 0.5, distLimit = simulScenarios$distance[[scenarioIndex]], perSiteClockRate = 2.4e-3, control = list(lengthForNullExtBranchesInPhylo = 1e-6, numReplicatesForNodeTimes = 10, numReplicatesForCoalRates = 10, numThreads = 8, MrBayesOutputThinningRate = 0.1))
+    # saveRDS(clusterOutput, file = paste("outputFiles/clusteringScenario", simulScenarios[scenarioIndex, "distance"], "days.rds", sep = ""), compress=T)
+    # rm(clusterOutput)
+    # gc() # To prevent memory problems. The process runs out of memory otherwise.
+    clusterOutput
+    # NULL
+  })
 ```
 For each definition, we can then compute a cluster size distribution for the MAP clusters and the linkage clusters.
 ```{r, eval = FALSE}
-summaryFct <- function(outputList) {
+filesToImport <- list.files(path = "outputFiles/", pattern = "days.rds", full.names = T)
+fileOrder <- order(as.numeric(stringr::str_extract(filesToImport, pattern = "[:digit:]+(?=days.rds)")))
+clusterResults <- lapply(filesToImport[fileOrder], FUN = readRDS)
+summaryFct <- function(outputList, cutTreeHeights = (1:5)/10) {
   MAPclusSizeDist <- table(table(outputList$MAPclusters))
-  hierClusSizeDist <- table(table(outputList$hierarchicalClusters))
-  overlap <- aricode::AMI(outputList$MAPclusters, outputList$hierarchicalClusters)
-  list(MAPclusSizeDist = MAPclusSizeDist, hierClusSizeDist = hierClusSizeDist, overlap = overlap)
+  hierClusters <- lapply(cutTreeHeights, cutree, tree = outputList$hclustObject, k = NULL)
+  hierClusSizeDists <- lapply(hierClusters, function(x) table(table(x)))
+  overlapWithMAP <- sapply(hierClusters, FUN= aricode::AMI, c1 = outputList$MAPclusters)
+  list(MAPclusSizeDist = MAPclusSizeDist, hierClusSizeDists = hierClusSizeDists, overlapWithMAP = overlapWithMAP)
 }
-sizeDistributions <- lapply(clustersByScenario, summaryFct)
+clusterSummaries <- lapply(clusterResults, summaryFct)
 ```
-We now plot the adjacency matrices for the nine largest clusters.
+We now focus on the $21$-day requirement. The `plotClustersTile` function returns separate tile plots for each cluster, with the sample partition given by argument `clusterIndices`. In the simulations, we used the "single linkage" method to build the dendrogram. This can be tuned by the `hclust` method in the control parameters for `covidCluster`. The output also includes the mean adjacency matrix, which can be used to produce another dendrogram than the one given by `hclustObject`. We consider two linkage thresholds, $0.5$ and $0.75$.
 ```{r, eval = FALSE}
-facettedPlot <- plotClustersTile(covidClusterObject = clustersByScenario[[1]], minClusSize = 15, textScaleFactor = 1, oneFilePerCluster = TRUE, numClusters = 16, outputFolder = "outputFiles/")
+selectedClusters <- clusterResults[[3]]
+plotClustersTile(covidClusterObject = selectedClusters, clusterIndices = cutree(selectedClusters$hclustObject, h = 0.5), minClusSize = 10, textScaleFactor = 1, oneFilePerCluster = TRUE, device = "pdf", outputFolder = "outputFiles/", controlListGgsave = list(width = 8, height = 8))
+plotClustersTile(covidClusterObject = selectedClusters, clusterIndices = cutree(selectedClusters$hclustObject, h = 0.25), minClusSize = 10, textScaleFactor = 1, oneFilePerCluster = TRUE, device = "pdf", outputFolder = "outputFiles/", controlListGgsave = list(width = 8, height = 8))
+```
+We now represent with bar charts the cluster size distributions under different linkage criteria.
+```{r, eval=F}
+library(ggplot2)
+
+funToProduceTableChunk <- function(cutHeight, hclusObject) {
+  dataCounts <- table(table(cutree(hclusObject, h = cutHeight)))
+  freqTable <- dataCounts[-1]/(sum(dataCounts[-1]))
+  data.frame(clusSize = names(freqTable), linkageReq = 1 - cutHeight, frequency = as.vector(freqTable), counts = as.vector(dataCounts)[-1])
+}
+heightValues <- (1:5)/10
+clusObjectToPlot <- selectedClusters$hclustObject
+frameForBarPlot <- do.call("rbind", lapply(heightValues, funToProduceTableChunk, hclusObject = clusObjectToPlot))
+truncation <- 10
+groupIndex <- cut(as.numeric(frameForBarPlot$clusSize), breaks = c(1:(truncation -1), Inf))
+clusSizesUnderThreshold <- as.numeric(unique(frameForBarPlot$clusSize))[as.numeric(unique(frameForBarPlot$clusSize)) < truncation]
+levels(groupIndex) <- c(as.character(clusSizesUnderThreshold), paste(truncation, "+", sep = ""))
+frameForBarPlot$groupedClusSizes <- groupIndex
+frameForBarPlot$groupedClusSizes <- factor(frameForBarPlot$groupedClusSizes, levels = rev(levels(frameForBarPlot$groupedClusSizes)))
+
+# We add to the plot text indicating the singleton frequencies.
+
+produceSingletonFrequencyByLinkageReq <- function(cutHeight, hclusObject) {
+  dataCounts <- table(table(cutree(hclusObject, h = cutHeight)))
+  frequency <- dataCounts[[1]]/sum(dataCounts)
+  labelCharacter <- sprintf("%0.3f", round(frequency, digits = 3))
+  labelToPrint <- paste(labelCharacter, paste("(", as.vector(dataCounts)[[1]], ")", sep = ""), sep = " ")
+  data.frame(linkageReq = 1- cutHeight, frequency = 0, label = labelToPrint)
+}
+dataFrameForSingletonLine <- do.call("rbind", lapply(heightValues, produceSingletonFrequencyByLinkageReq, hclusObject = clusObjectToPlot))
+
+plotObject <- ggplot(data = frameForBarPlot, aes(x = linkageReq, y = frequency, fill = groupedClusSizes)) + geom_col() + scale_fill_viridis_d(name = "Cluster size") + xlab("Linkage requirement") + ylab("Frequency breakdown") + theme_bw(base_size = 13) + geom_text(data = dataFrameForSingletonLine, mapping = aes(fill = NULL, label = label))
+
+ggsave(plotObject, file = "outputFiles/clusSizeDistByLinkageReq_21days.jpeg", device = "jpeg", width = 8, height = 8, units = "in")
+```
+We now determine the actual number of large clusters.
+```{r, eval=F}
+by(data = frameForBarPlot, INDICES = frameForBarPlot$linkageReq, FUN = function(chunk) lapply(split(chunk$counts, f = chunk$groupedClusSizes), FUN = sum), simplify = F)
+```
+We now look at clusters under other time requirements. We first verify how similar partitions conditional on a range of linkage requirements.
+```{r, eval=FALSE}
+combinations <- combn(seq_along(clusterResults), 2)
+funToGetOverlapIndices <- function(heightReq) {
+  ARIs <- apply(combinations, MARGIN = 2, FUN = function(indexCol) {
+    firstSet <- cutree(clusterResults[[indexCol[[1]]]]$hclustObject, h = heightReq)
+    secondSet <- cutree(clusterResults[[indexCol[[2]]]]$hclustObject, h = heightReq)
+    aricode::AMI(firstSet, secondSet)
+  })
+}
+heightRequirements <- (1:5)/10
+correspByLinkage <- sapply(heightRequirements, funToGetOverlapIndices)
+rownames(correspByLinkage) <- paste(combinations[1, ], combinations[2, ], sep = "-")
+colnames(correspByLinkage) <- paste("Linkage", 100*(1-heightRequirements), sep = "-")
+xtable::xtable(correspByLinkage, digits = 3)
+```
+AMI scores are high overall, but meaningful differences between partitions still exist. Let's inspect the cluster size distributions.
+```{r, eval=F}
+funToProduceTableChunkTime <- function(index, cutHeight, distLimitVec) {
+  dataCounts <- table(table(cutree(clusterResults[[index]]$hclustObj, h = cutHeight)))
+  freqTable <- dataCounts[-1]/(sum(dataCounts[-1]))
+  data.frame(clusSize = names(freqTable), linkageReq = 1 - cutHeight, frequency = as.vector(freqTable), counts = as.vector(dataCounts)[-1], timeLimit = distLimitVec[[index]])
+}
+cutHeightTime <- 0.3
+frameForBarPlotTime <- do.call("rbind", lapply(seq_along(clusterResults), funToProduceTableChunkTime, cutHeight = cutHeightTime, distLimitVec = distLimitVec))
+truncation <- 10
+groupIndex <- cut(as.numeric(frameForBarPlotTime$clusSize), breaks = c(1:(truncation -1), Inf))
+clusSizesUnderThreshold <- as.numeric(unique(frameForBarPlotTime$clusSize))[as.numeric(unique(frameForBarPlotTime$clusSize)) < truncation]
+levels(groupIndex) <- c(as.character(clusSizesUnderThreshold), paste(truncation, "+", sep = ""))
+frameForBarPlotTime$groupedClusSizes <- groupIndex
+frameForBarPlotTime$groupedClusSizes <- factor(frameForBarPlotTime$groupedClusSizes, levels = rev(levels(frameForBarPlotTime$groupedClusSizes)))
+
+# We add to the plot text indicating the singleton frequencies.
+
+produceSingletonFrequencyByLinkageReqTime <- function(index, cutHeight, distLimitVec) {
+  dataCounts <- table(table(cutree(clusterResults[[index]]$hclustObject, h = cutHeight)))
+  frequency <- dataCounts[[1]]/sum(dataCounts)
+  labelCharacter <- sprintf("%0.3f", round(frequency, digits = 3))
+  labelToPrint <- paste(labelCharacter, paste("(", as.vector(dataCounts)[[1]], ")", sep = ""), sep = " ")
+  data.frame(linkageReq = 1- cutHeight, frequency = 0, label = labelToPrint, timeLimit = distLimitVec[[index]])
+}
+dataFrameForSingletonLine <- do.call("rbind", lapply(seq_along(clusterResults), produceSingletonFrequencyByLinkageReqTime, cutHeight = cutHeightTime, distLimitVec = distLimitVec))
+
+plotObjectTime <- ggplot(data = frameForBarPlotTime, aes(x = factor(timeLimit, levels = unique(timeLimit), labels = paste(unique(timeLimit), "days", sep = " ")), y = frequency, fill = groupedClusSizes)) + geom_col() + scale_fill_viridis_d(name = "Cluster size") + xlab("Max. time criterion") + ylab("Frequency breakdown") + theme_bw(base_size = 13) + geom_text(data = dataFrameForSingletonLine, mapping = aes(fill = NULL, label = label))
+
+ggsave(plotObjectTime, file = "outputFiles/clusSizeDistByTimeReq_Linkage70.jpeg", device = "jpeg", width = 8, height = 8, units = "in")
 ```
 
 
